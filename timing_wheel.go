@@ -63,8 +63,13 @@ func (w *TimingWheel) After(timeout time.Duration) <-chan struct{} {
 	if timeout >= w.maxTimeout {
 		panic("timeout greater than max size")
 	}
+	pos := atomic.LoadUint32(&w.position)
 
-	return *w.timeScales[(w.position+uint32(timeout/w.interval))&w.bucketMod]
+	wsp := &w.timeScales[(pos+uint32(timeout/w.interval))&w.bucketMod]
+
+	ws := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(wsp)))
+
+	return *((*waitSignal)(ws))
 }
 
 func (w *TimingWheel) run() {
@@ -80,13 +85,15 @@ func (w *TimingWheel) run() {
 }
 
 func (w *TimingWheel) onTicker() {
-	pos := w.position
+	pos := atomic.LoadUint32(&w.position)
 
 	wsp := &w.timeScales[pos]
 
-	ws := atomic.SwapPointer(
-		(*unsafe.Pointer)(unsafe.Pointer(wsp)), unsafe.Pointer(w.preSignal))
-	atomic.SwapUint32(&w.position, (w.position+1)&w.bucketMod)
+	ws := atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(wsp)),
+		unsafe.Pointer(w.preSignal))
+
+	atomic.SwapUint32(&w.position, (pos+1)&w.bucketMod)
+
 	close(*((*waitSignal)(ws)))
 	var prepare waitSignal = make(chan struct{})
 	w.preSignal = &prepare
